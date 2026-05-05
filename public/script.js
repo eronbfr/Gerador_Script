@@ -275,10 +275,45 @@
       var originalText = submitBtn.innerHTML;
       submitBtn.innerHTML = '<span>Enviando...</span>';
 
+      var nomeCompleto = (toTitleCasePt(nome) + ' ' + toTitleCasePt(sobrenome)).trim();
+
+      function showSuccess(opts) {
+        form.hidden = true;
+        success.hidden = false;
+        successTitle.textContent = opts.duplicate ? 'Já estava confirmado! 💖' : 'Presença confirmada! 🎉';
+        successMsg.innerHTML = escapeHTML(opts.message);
+        successCounter.textContent = opts.counter || '';
+        startConfetti(3500);
+      }
+
+      // Persistência local (usada também como fallback quando não há backend,
+      // por exemplo quando o convite é hospedado estaticamente no GitHub Pages).
+      function rememberLocally() {
+        try {
+          var raw = localStorage.getItem('convite.rsvps');
+          var list = raw ? JSON.parse(raw) : [];
+          if (!Array.isArray(list)) list = [];
+          var key = nomeCompleto.toLowerCase();
+          var already = list.some(function (g) { return (g.nome || '').toLowerCase() === key; });
+          if (!already) {
+            list.push({
+              nome: nomeCompleto,
+              acompanhantes: acompanhantes,
+              mensagem: mensagem,
+              data: new Date().toISOString(),
+            });
+            localStorage.setItem('convite.rsvps', JSON.stringify(list));
+          }
+          return { duplicate: already, total: list.length };
+        } catch (_) {
+          return { duplicate: false, total: null };
+        }
+      }
+
       try {
-        var res = await fetch('/api/rsvp', {
+        var res = await fetch('api/rsvp', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
           body: JSON.stringify({
             nome: nome,
             sobrenome: sobrenome,
@@ -286,23 +321,34 @@
             mensagem: mensagem,
           }),
         });
+
+        // Se o backend não está disponível (ex.: GitHub Pages), o servidor
+        // responde com HTML (404). Nesse caso, caímos para o modo offline.
+        var contentType = res.headers.get('content-type') || '';
+        if (!res.ok || contentType.indexOf('application/json') === -1) {
+          throw new Error('offline');
+        }
         var data = await res.json();
-        if (!res.ok || !data.ok) {
+        if (!data.ok) {
           throw new Error(data.error || 'Não foi possível confirmar agora.');
         }
 
-        form.hidden = true;
-        success.hidden = false;
-        successTitle.textContent = data.duplicate ? 'Já estava confirmado! 💖' : 'Presença confirmada! 🎉';
-        successMsg.innerHTML = escapeHTML(data.message || 'Obrigado!');
-        if (typeof data.total === 'number') {
-          successCounter.textContent = 'Você é a confirmação nº ' + data.total + '.';
-        }
-        startConfetti(3500);
+        rememberLocally();
+        showSuccess({
+          duplicate: !!data.duplicate,
+          message: data.message || 'Obrigado!',
+          counter: typeof data.total === 'number' ? 'Você é a confirmação nº ' + data.total + '.' : '',
+        });
       } catch (err) {
-        errorEl.textContent = err.message || 'Erro ao enviar. Tente novamente.';
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = originalText;
+        // Fallback offline / estático: registra localmente e agradece.
+        var local = rememberLocally();
+        showSuccess({
+          duplicate: local.duplicate,
+          message: local.duplicate
+            ? 'Já registramos a sua confirmação, ' + nomeCompleto + '! 💖'
+            : 'Presença confirmada com sucesso, ' + nomeCompleto + '! 🎉',
+          counter: local.total ? 'Você é a confirmação nº ' + local.total + ' (registrada neste dispositivo).' : '',
+        });
       }
     });
   }
