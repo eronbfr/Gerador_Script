@@ -1,3 +1,0 @@
-paramiko>=3.5.1
-pyte>=0.8.2
-Pillow>=11.0.0
