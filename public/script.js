@@ -223,6 +223,56 @@
     });
   }
 
+  // -------- Envio para Google Forms (opcional) --------
+
+  // Se o usuário preencheu `public/config.js` com a URL do `formResponse`
+  // e os IDs `entry.<numero>`, enviamos a confirmação diretamente para o
+  // Google Form. As respostas caem na planilha do Google Sheets vinculada,
+  // sem precisar de servidor próprio.
+  //
+  // Observação: o Google Forms não envia cabeçalhos CORS, então usamos
+  // `mode: 'no-cors'`. Isso significa que não conseguimos ler o status HTTP
+  // — se o `fetch` resolver sem lançar, consideramos enviado. Em caso de
+  // falha de rede o `catch` no chamador trata o fallback.
+  async function submitToGoogleForm(payload) {
+    var cfg = (window.CONVITE_CONFIG || {}).googleForm || {};
+    var entries = cfg.entries || {};
+    if (!cfg.formResponseUrl || !entries.nome) {
+      return { configured: false };
+    }
+
+    var data = new URLSearchParams();
+    function appendIf(entryId, value) {
+      if (entryId && value !== undefined && value !== null && value !== '') {
+        data.append(entryId, String(value));
+      }
+    }
+
+    appendIf(entries.nome, toTitleCasePt(payload.nome));
+    appendIf(entries.sobrenome, toTitleCasePt(payload.sobrenome));
+    appendIf(entries.acompanhantes, payload.acompanhantes);
+    if (entries.acompanhantesNomes) {
+      var nomes = (payload.acompanhantesNomes || [])
+        .map(function (a) { return (a.nome + ' ' + a.sobrenome).trim(); })
+        .filter(Boolean)
+        .join('; ');
+      appendIf(entries.acompanhantesNomes, nomes);
+    }
+    appendIf(entries.mensagem, payload.mensagem);
+
+    try {
+      await fetch(cfg.formResponseUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: data.toString(),
+      });
+      return { configured: true, ok: true };
+    } catch (err) {
+      return { configured: true, ok: false, error: err };
+    }
+  }
+
   // -------- Formulário de RSVP --------
 
   function renderAcompanhantesFields(qtd) {
@@ -414,6 +464,33 @@
       }
 
       try {
+        // 1) Se o convite estiver configurado para um Google Form, esse é o
+        //    caminho preferencial: a confirmação vai parar diretamente na
+        //    planilha do Google Sheets associada ao formulário.
+        var googleResult = await submitToGoogleForm({
+          nome: nome,
+          sobrenome: sobrenome,
+          nomeCompleto: nomeCompleto,
+          acompanhantes: acompanhantes,
+          acompanhantesNomes: acompanhantesNomes,
+          mensagem: mensagem,
+        });
+        if (googleResult.configured) {
+          if (!googleResult.ok) {
+            throw new Error('google-form-failed');
+          }
+          var localG = rememberLocally();
+          showSuccess({
+            duplicate: localG.duplicate,
+            message: localG.duplicate
+              ? 'Já registramos a sua confirmação, ' + nomeCompleto + '! 💖'
+              : 'Presença confirmada com sucesso, ' + nomeCompleto + '! 🎉',
+            counter: '',
+          });
+          return;
+        }
+
+        // 2) Sem Google Form configurado, tenta o backend Express local.
         var res = await fetch('api/rsvp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
